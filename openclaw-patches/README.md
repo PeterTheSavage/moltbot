@@ -1,12 +1,12 @@
 # OpenClaw Gateway Patches
 
-Custom patches for the OpenClaw gateway control UI, adding:
+Custom patches for the OpenClaw gateway control UI (v2026.2.12).
 
 ## Features
 
-- **Providers UI** (`control-ui/assets/providers.js`) — Custom providers tab with API key management, model auto-discovery for Chutes AI, Bandlayer, Kilo Code, and other OpenAI-compatible providers.
-- **UI Bundle Patch** (`control-ui/assets/index-B4LPvte9.js`) — Patched compiled UI to show discovered provider models in `/chat` and `/agents` dropdowns, and use `config.patch` for saves.
-- **CORS Discovery Proxy** (`control-ui/discover-proxy.js`) — Lightweight Node.js proxy server (port 18791) that bypasses CORS restrictions for model discovery API calls. Follows redirects.
+- **Providers UI** (`control-ui/assets/providers.js`) — Full providers management tab with API key handling, model auto-discovery, toast notifications, loading states, and inline key input.
+- **UI Bundle Patch** (`control-ui/assets/index-B4LPvte9.js`) — Patched compiled UI: providers tab in sidebar, model selector in chat, provider models in dropdowns, diff-based `config.patch` saves.
+- **CORS Discovery Proxy** (`control-ui/discover-proxy.js`) — Node.js proxy (port 18791) for model discovery API calls. Follows redirects, 10MB body limit, 20 req/10s rate limiting.
 - **Systemd Service** (`systemd/openclaw-discover-proxy.service`) — Auto-starts the CORS proxy.
 
 ## Installation
@@ -32,15 +32,26 @@ systemctl --user enable --now openclaw-discover-proxy.service
 openclaw gateway restart --force
 ```
 
-## Supported Providers
+## Supported Providers (22)
 
-- Chutes AI (`https://llm.chutes.ai/v1`)
-- Bandlayer AI (`https://api.bandlayer.com/v1`)
-- Kilo Code (`https://kilocode.ai/api/openrouter`)
-- OpenRouter, xAI, MiniMax, Moonshot, and more
+OpenAI, Anthropic, Google, xAI (Grok), OpenRouter, Bandlayer AI, Kilo Code, Chutes AI, MiniMax, Moonshot AI, Qwen, Z.AI, Qianfan, GitHub Copilot, Vercel AI Gateway, OpenCode Zen, Xiaomi, Synthetic, Together AI, Venice AI, Mistral, **Llama API** + custom providers.
+
+## UI Bundle Patches (9)
+
+1. `ap()` — Include provider models in all model dropdowns
+2. Chat tab handler — Reload config on tab switch
+3. `In()` (config save) — Diff-based `config.patch` instead of full `config.set`
+4. `cu` array — Add "providers" to Settings nav group
+5. `Wr` routes — Add `/providers` route
+6. `ti()` labels — Add "Providers" label
+7. `uu()` icons — Add "settings" icon for providers
+8. Providers tab handler — Load config on tab activation
+9. Chat model selector — Inline model dropdown in chat controls
 
 ## Notes
 
-- API keys are stored in `~/.openclaw/openclaw.json` under `models.providers.<id>.apiKey`
-- The CORS proxy runs on port 18791 and is only used for model discovery (not chat)
-- The UI bundle patch is version-specific to OpenClaw 2026.2.12
+- API keys stored in `~/.openclaw/openclaw.json` under `models.providers.<id>.apiKey`
+- CORS proxy (port 18791) is only used for model discovery, not chat streaming
+- Bundle patch is version-specific to OpenClaw 2026.2.12 (`index-B4LPvte9.js`)
+- All `alert()`/`prompt()` replaced with non-blocking toast notifications
+- Config saves use `config.patch` (partial diff) to avoid schema validation errors

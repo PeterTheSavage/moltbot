@@ -1,8 +1,25 @@
 (function () {
   "use strict";
-  var POLL = 300, active = false, cfgCache = null, editProv = null, showAdd = false, expandedModels = {};
+  var POLL = 500, active = false, cfgCache = null, editProv = null, showAdd = false, expandedModels = {};
   var addSel = "", addKey = "", addOauth = false, addCustom = { id: "", baseUrl: "", api: "openai-completions", modelId: "", modelName: "", ctx: "131072", max: "8192" };
   var configLoaded = false;
+  var discoveringPid = null, discoverKeyPid = null, savingState = null;
+  var cssInjected = false;
+
+  function toast(msg, type) {
+    type = type || "info";
+    var c = document.getElementById("pi-toast-c");
+    if (!c) { c = document.createElement("div"); c.id = "pi-toast-c"; c.style.cssText = "position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none"; document.body.appendChild(c) }
+    var t = document.createElement("div");
+    var bg = type === "success" ? "#12291a" : type === "error" ? "#2a1216" : "#162a3a";
+    var border = type === "success" ? "#2ecc71" : type === "error" ? "#e74c3c" : "#5ba3d9";
+    var icon = type === "success" ? "\u2705" : type === "error" ? "\u274C" : "\u2139\uFE0F";
+    t.style.cssText = "pointer-events:auto;padding:10px 16px;border-radius:8px;font-size:.82rem;color:#e0e0e0;background:" + bg + ";border:1px solid " + border + ";box-shadow:0 4px 16px rgba(0,0,0,.3);max-width:380px;opacity:0;transform:translateX(20px);transition:all .25s ease";
+    t.textContent = icon + " " + msg;
+    c.appendChild(t);
+    requestAnimationFrame(function () { t.style.opacity = "1"; t.style.transform = "translateX(0)" });
+    setTimeout(function () { t.style.opacity = "0"; t.style.transform = "translateX(20px)"; setTimeout(function () { t.remove() }, 300) }, type === "error" ? 5000 : 3000);
+  }
 
   var BP = [
     {
@@ -99,7 +116,7 @@
   function getCfg() { var a = getApp(); return a ? a.configForm : null }
 
   function loadCfgFromGateway(app){
-    if(!app||!app.client||!app.client.request)return Promise.resolve();
+    if(!app||!app.client||!app.client.request||!app.connected)return Promise.resolve();
     return app.client.request("config.get",{}).then(function(res){
       if(res){
         app.configSnapshot=res;
@@ -136,30 +153,38 @@
     var attempts=0,max=20;
     function tryLoad(){
       attempts++;
-      if(!app||!app.client||!app.client.request||attempts>max){render();return}
+      if(!app||!app.client||!app.client.request||!app.connected||attempts>max){render();return}
       app.configFormDirty=false;
       loadCfgFromGateway(app).then(function(){configLoaded=true;setTimeout(render,50)}).catch(function(){setTimeout(tryLoad,500)});
     }
     setTimeout(tryLoad,1500);
   }
 
+  var patchRetries = 0;
   function patchCfg(app,patch,onOk){
-    if(!app||!app.client||!app.client.request||!app.connected){console.warn("providers: gateway not connected, retrying in 1s...");setTimeout(function(){patchCfg(app,patch,onOk)},1000);return}
+    if(!app||!app.client||!app.client.request||!app.connected){
+      if(patchRetries >= 10){patchRetries=0;savingState=null;render();toast("Save failed: gateway not connected after 10 retries","error");return}
+      patchRetries++;
+      console.warn("providers: gateway not connected, retry " + patchRetries + "/10...");
+      setTimeout(function(){patchCfg(app,patch,onOk)},1000);return;
+    }
+    patchRetries=0;
     var raw=JSON.stringify(patch,null,2);
-    console.log("providers: sending config.patch",patch);
     function doPatch(hash){
       app.client.request("config.patch",{raw:raw,baseHash:hash}).then(function(){
-        console.log("providers: config.patch succeeded");
+        savingState=null;
         if(onOk)onOk();
+        else toast("Configuration saved","success");
         return loadCfgFromGateway(app);
       }).then(function(){setTimeout(render,50)}).catch(function(e){
         var msg=String(e);
         if(msg.indexOf("1012")>=0||msg.indexOf("restart")>=0||msg.indexOf("closed")>=0){
-          console.log("providers: gateway restarting after config change, will reconnect...");
+          savingState=null;
           if(onOk)onOk();
+          else toast("Saved — gateway restarting...","success");
           configLoaded=false;
           reloadAfterRestart(app);
-        } else{console.error("providers: save failed",e);alert("Save failed: "+e)}
+        } else{savingState=null;render();toast("Save failed: "+e,"error")}
       });
     }
     var hash=app.configSnapshot&&app.configSnapshot.hash?app.configSnapshot.hash:null;
@@ -167,8 +192,8 @@
     else{
       app.client.request("config.get",{}).then(function(res){
         if(res)app.configSnapshot=res;
-        if(res&&res.hash)doPatch(res.hash);else console.error("providers: no config hash");
-      }).catch(function(e){console.error(e)});
+        if(res&&res.hash)doPatch(res.hash);else{savingState=null;render();toast("No config hash available","error")}
+      }).catch(function(e){savingState=null;render();toast("Config load failed: "+e,"error")});
     }
   }
 
@@ -284,7 +309,9 @@
       } else return;
     }
     editProv = null;
-    patchCfg(app, patch, function(){ alert("API key saved for " + pid + ". You may need to wait a moment for the gateway to restart.") });
+    savingState = pid;
+    render();
+    patchCfg(app, patch, function(){ toast("API key saved for " + pid, "success") });
   }
 
   function doRemove(app, pid) {
@@ -298,27 +325,32 @@
 
   function isRedacted(v) { return !v || v === "***" || v === "__OPENCLAW_REDACTED__" || v.indexOf("REDACTED") >= 0 }
 
-  function doDiscoverModels(app, pid) {
+  function doDiscoverModels(app, pid, providedKey) {
     var cfg = getCfg();
     var prov = cfg && cfg.models && cfg.models.providers ? cfg.models.providers[pid] : null;
     var bp = BP.find(function (b) { return b.id === pid });
     var baseUrl = prov ? prov.baseUrl : (bp ? bp.url : "");
-    if (!baseUrl) { alert("No base URL for " + pid); return }
+    if (!baseUrl) { toast("No base URL for " + pid, "error"); return }
     var cfgKey = prov ? prov.apiKey : "";
     var apiKey = "";
-    if (cfgKey && !isRedacted(cfgKey)) {
+    if (providedKey && providedKey.trim()) {
+      apiKey = providedKey.trim();
+    } else if (cfgKey && !isRedacted(cfgKey)) {
       apiKey = cfgKey;
     } else {
-      apiKey = prompt("Enter API key for " + (bp ? bp.label : pid) + " (needed for model discovery):", "");
-      if (!apiKey || !apiKey.trim()) { alert("API key required for model discovery"); return }
-      apiKey = apiKey.trim();
+      discoverKeyPid = pid;
+      render();
+      return;
     }
+    discoverKeyPid = null;
+    discoveringPid = pid;
+    render();
     var modelsUrl = (bp && bp.discoverUrl) ? bp.discoverUrl : baseUrl.replace(/\/+$/, "") + "/models";
     var proxyHost = location.hostname || "127.0.0.1";
     var proxyBase = "http://" + proxyHost + ":18791";
     var fetchUrl = proxyBase + "/?url=" + encodeURIComponent(modelsUrl) + "&key=" + encodeURIComponent(apiKey);
     fetch(fetchUrl).then(function (r) {
-      if (!r.ok) throw new Error("HTTP " + r.status + (r.status === 401 ? " (Unauthorized — check your API key)" : ""));
+      if (!r.ok) throw new Error("HTTP " + r.status + (r.status === 401 ? " — check your API key" : ""));
       return r.json();
     }).then(function (data) {
       var models = (data.data || data.models || []).filter(function (m) {
@@ -333,15 +365,16 @@
         var maxT = m.max_output_length || (m.top_provider && m.top_provider.max_completion_tokens) || 8192;
         return { id: m.id, name: m.name || m.id.split("/").pop() || m.id, reasoning: isR, input: inp, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: ctx, maxTokens: maxT };
       });
-      if (models.length === 0) { alert("No models discovered from " + modelsUrl); return }
-      alert("Discovered " + models.length + " models for " + (bp ? bp.label : pid) + ". Saving...");
+      discoveringPid = null;
+      if (models.length === 0) { toast("No models found at " + modelsUrl, "error"); render(); return }
+      toast("Discovered " + models.length + " models for " + (bp ? bp.label : pid), "success");
       var patch = { models: { providers: {} } };
       var provPatch = { models: models };
       if (!prov) { provPatch.baseUrl = baseUrl; provPatch.api = bp ? bp.api : "openai-completions" }
       if (cfgKey && isRedacted(cfgKey)) { provPatch.apiKey = apiKey }
       patch.models.providers[pid] = provPatch;
       patchCfg(app, patch);
-    }).catch(function (e) { alert("Model discovery failed: " + e.message) });
+    }).catch(function (e) { discoveringPid = null; render(); toast("Discovery failed: " + e.message, "error") });
   }
 
   var CSS = `<style>
@@ -390,10 +423,21 @@
 .pi-fi input,.pi-fi select{background:var(--bg-3,#222238);border:1px solid var(--border,#2a2a3e);border-radius:5px;padding:6px 8px;color:var(--fg,#e0e0e0);font-size:.8rem}
 .pi-fi input:focus,.pi-fi select:focus{outline:none;border-color:var(--accent,#6c63ff)}
 .pi-loading{text-align:center;color:var(--muted,#888);padding:24px;font-size:.9rem}
+.pi-dkey{display:flex;gap:5px;margin-top:6px;align-items:center}.pi-dkey input{flex:1;min-width:0;background:var(--bg-3,#222238);border:1px solid var(--border,#2a2a3e);border-radius:5px;padding:5px 8px;color:var(--fg,#e0e0e0);font-size:.78rem}.pi-dkey input:focus{outline:none;border-color:var(--accent,#6c63ff)}
+@keyframes pi-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.pi-spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--border,#2a2a3e);border-top-color:var(--accent,#6c63ff);border-radius:50%;animation:pi-spin .6s linear infinite;vertical-align:middle;margin-right:4px}
 </style>`;
+
+  function injectCSS() {
+    if (cssInjected) return;
+    var s = document.getElementById("pi-css");
+    if (!s) { var d = document.createElement("div"); d.id = "pi-css"; d.innerHTML = CSS; document.head.appendChild(d.querySelector("style")); d.remove() }
+    cssInjected = true;
+  }
 
   function render() {
     var el = getMain(), app = getApp(); if (!el || !app) return;
+    injectCSS();
     var cfg = getCfg();
 
     var box = el.querySelector(".pi-inj");
@@ -403,16 +447,16 @@
     }
 
     if (!cfg) {
-      box.innerHTML = CSS + '<div class="pi"><div class="pi-loading">Loading configuration...</div></div>';
+      box.innerHTML = '<div class="pi"><div class="pi-loading"><span class="pi-spinner"></span> Loading configuration...</div></div>';
       return;
     }
 
     var cp = cfgProv(cfg), pr = cfgProf(cfg), al = cfgAl(cfg), data = merge(cp, pr);
 
-    var h = CSS + '<div class="pi">';
+    var h = '<div class="pi">';
     h += '<div class="card"><div class="pi-tb"><div><div class="card-title">AI Providers</div>';
     h += '<div class="card-sub">\u2705 ' + data.configured.length + ' configured &nbsp;\u00B7&nbsp; \uD83D\uDD13 ' + data.available.length + ' available</div></div>';
-    h += '<div style="display:flex;gap:6px"><button class="btn" id="pi-ref">Refresh</button>';
+    h += '<div style="display:flex;gap:6px"><button class="btn" id="pi-ref">' + (savingState ? '<span class="pi-spinner"></span> Saving...' : '\u21BB Refresh') + '</button>';
     h += '<button class="btn btn--primary" id="pi-ta">' + (showAdd ? "Cancel" : "\uFF0B Add Provider") + '</button></div></div></div>';
 
     if (showAdd) h += renderAddForm();
@@ -510,7 +554,12 @@
 
     h += '<div class="pi-acts">';
     if (editProv !== p.id) h += '<button class="btn btn--sm" data-ek="' + esc(p.id) + '">\uD83D\uDD11 Set API Key</button>';
-    h += '<button class="btn btn--sm" data-dm="' + esc(p.id) + '">\uD83D\uDD0D Discover Models</button>';
+    if (discoveringPid === p.id) h += '<button class="btn btn--sm" disabled><span class="pi-spinner"></span> Discovering...</button>';
+    else h += '<button class="btn btn--sm" data-dm="' + esc(p.id) + '">\uD83D\uDD0D Discover Models</button>';
+    if (discoverKeyPid === p.id) {
+      h += '<div class="pi-dkey"><input type="password" id="dk-' + esc(p.id) + '" placeholder="API key for discovery"/>';
+      h += '<button class="btn btn--sm" data-dks="' + esc(p.id) + '">Go</button><button class="btn btn--sm" data-dkc="1">Cancel</button></div>';
+    }
     if (!p.builtin && isOn) h += '<button class="btn btn--sm btn--danger" data-rp="' + esc(p.id) + '">Remove</button>';
     h += '</div></div>';
     return h;
@@ -548,13 +597,15 @@
     document.querySelectorAll("[data-sk]").forEach(function (b) { b.onclick = function () { var i = document.getElementById("pk-" + b.dataset.sk); if (i) doSetKey(app, b.dataset.sk, i.value); render() } });
     document.querySelectorAll("[data-rp]").forEach(function (b) { b.onclick = function () { if (confirm("Remove " + b.dataset.rp + "?")) doRemove(app, b.dataset.rp); render() } });
     document.querySelectorAll("[data-tm]").forEach(function (b) { b.onclick = function () { expandedModels[b.dataset.tm] = !expandedModels[b.dataset.tm]; render() } });
-    document.querySelectorAll("[data-dm]").forEach(function (b) { b.onclick = function () { doDiscoverModels(app, b.dataset.dm) } });
+    document.querySelectorAll("[data-dm]").forEach(function (b) { b.onclick = function () { doDiscoverModels(app, b.dataset.dm, null) } });
+    document.querySelectorAll("[data-dks]").forEach(function (b) { b.onclick = function () { var i = document.getElementById("dk-" + b.dataset.dks); if (i && i.value.trim()) doDiscoverModels(app, b.dataset.dks, i.value); else toast("Enter an API key", "error") } });
+    document.querySelectorAll("[data-dkc]").forEach(function (b) { b.onclick = function () { discoverKeyPid = null; render() } });
   }
 
   setInterval(function () {
     var t = isTab();
     if (t && !active) { active = true; ensureConfigLoaded(); setTimeout(render, 100) }
     else if (t && active) { var c = getCfg(); if (c !== cfgCache) { cfgCache = c; render() } }
-    else if (!t && active) { active = false; configLoaded = false; var b = document.querySelector(".pi-inj"); if (b) b.remove() }
+    else if (!t && active) { active = false; configLoaded = false; discoveringPid = null; discoverKeyPid = null; savingState = null; var b = document.querySelector(".pi-inj"); if (b) b.remove() }
   }, POLL);
 })();
