@@ -375,7 +375,7 @@ Deletes the session entry and archives its transcript.`))){e.sessionsLoading=!0,
               </option>`)}
         </select>
       </label>
-      <label class="field" style="max-width:220px;margin-right:4px;flex-shrink:1">
+      <label class="field" style="max-width:180px;margin-right:8px;flex-shrink:1;flex-grow:0">
         <select
           .value=${(()=>{const _cf=e.configSnapshot?.config;return _cf?.agents?.defaults?.model?.primary??""})()}
           ?disabled=${!e.connected}
