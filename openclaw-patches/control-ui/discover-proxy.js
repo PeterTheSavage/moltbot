@@ -65,7 +65,7 @@ const server = http.createServer((req, res) => {
     let target;
     try {
       target = new URL(href);
-    } catch (e) {
+    } catch {
       return cb(new Error("Invalid target URL: " + href));
     }
     if (target.protocol !== "https:" && target.protocol !== "http:") {
