@@ -85,6 +85,10 @@
       id: "mistral", label: "Mistral", hint: "API key", url: "https://api.mistral.ai/v1", api: "openai-completions", auth: ["api_key"], env: "MISTRAL_API_KEY",
       m: [{ id: "codestral-latest", n: "Codestral", r: 0, c: 256000 }]
     },
+    {
+      id: "llama", label: "Llama API", hint: "Meta Llama models \u2014 API key", url: "https://api.llama.com/v1", api: "openai-completions", auth: ["api_key"], env: "LLAMA_API_KEY",
+      m: [{ id: "Llama-4-Maverick-17B-128E-Instruct", n: "Llama 4 Maverick", r: 0, c: 1048576 }, { id: "Llama-4-Scout-17B-16E-Instruct", n: "Llama 4 Scout", r: 0, c: 524288 }, { id: "Llama-3.3-70B-Instruct", n: "Llama 3.3 70B", r: 0, c: 131072 }]
+    },
   ];
 
   function esc(s) { return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;") }
