@@ -144,7 +144,7 @@
   }
 
   function patchCfg(app,patch,onOk){
-    if(!app||!app.client||!app.client.request)return;
+    if(!app||!app.client||!app.client.request||!app.connected){console.warn("providers: gateway not connected, retrying in 1s...");setTimeout(function(){patchCfg(app,patch,onOk)},1000);return}
     var raw=JSON.stringify(patch,null,2);
     console.log("providers: sending config.patch",patch);
     function doPatch(hash){
