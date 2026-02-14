@@ -498,15 +498,33 @@
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
+  padding: 6px 8px;
 }
 
 .content--chat .content-header > div:first-child {
   text-align: left;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.content--chat .page-title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.content--chat .page-sub {
+  font-size: 12px;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .content--chat .page-meta {
-  justify-content: flex-start;
+  justify-content: flex-end;
+  flex-shrink: 0;
 }
 
 .content--chat .chat-controls {

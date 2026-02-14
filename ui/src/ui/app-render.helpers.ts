@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import type { AppViewState } from "./app-view-state.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
@@ -8,6 +8,7 @@ import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import { OpenClawApp } from "./app.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
+import { loadConfig, type ConfigState } from "./controllers/config.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 
@@ -39,6 +40,55 @@ export function renderTab(state: AppViewState, tab: Tab) {
   `;
 }
 
+function extractModelIds(config: unknown): string[] {
+  if (!config || typeof config !== "object") {
+    return [];
+  }
+  const cfg = config as Record<string, unknown>;
+  const models = cfg.models as Record<string, unknown> | undefined;
+  if (!models) {
+    return [];
+  }
+  const providers = models.providers as Record<string, unknown> | undefined;
+  if (!providers) {
+    return [];
+  }
+  const ids: string[] = [];
+  for (const [_pid, prov] of Object.entries(providers)) {
+    if (!prov || typeof prov !== "object") {
+      continue;
+    }
+    const p = prov as Record<string, unknown>;
+    const modelList = p.models as unknown[] | undefined;
+    if (!Array.isArray(modelList)) {
+      continue;
+    }
+    for (const m of modelList) {
+      if (!m || typeof m !== "object") {
+        continue;
+      }
+      const mid = (m as Record<string, unknown>).id as string | undefined;
+      if (mid) {
+        ids.push(mid);
+      }
+    }
+  }
+  return ids;
+}
+
+function renderModelOptions(config: unknown, currentPrimary: string | undefined) {
+  const ids = extractModelIds(config);
+  if (ids.length === 0) {
+    return nothing;
+  }
+  return ids.map(
+    (id) =>
+      html`<option value=${id} ?selected=${id === currentPrimary}>
+        ${id.split("/").slice(-1)[0] || id}
+      </option>`,
+  );
+}
+
 export function renderChatControls(state: AppViewState) {
   const mainSessionKey = resolveMainSessionKey(state.hello, state.sessionsResult);
   const sessionOptions = resolveSessionOptions(
@@ -50,11 +100,20 @@ export function renderChatControls(state: AppViewState) {
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
-  // Refresh icon
+
+  const currentPrimary = (() => {
+    const cfg = state.configSnapshot?.config as Record<string, unknown> | undefined;
+    const agents = cfg?.agents as Record<string, unknown> | undefined;
+    const defaults = agents?.defaults as Record<string, unknown> | undefined;
+    const model = defaults?.model as Record<string, unknown> | undefined;
+    return (model?.primary as string) ?? undefined;
+  })();
+
+  // Icons
   const refreshIcon = html`
     <svg
-      width="18"
-      height="18"
+      width="16"
+      height="16"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -68,8 +127,8 @@ export function renderChatControls(state: AppViewState) {
   `;
   const focusIcon = html`
     <svg
-      width="18"
-      height="18"
+      width="16"
+      height="16"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -84,113 +143,145 @@ export function renderChatControls(state: AppViewState) {
       <circle cx="12" cy="12" r="3"></circle>
     </svg>
   `;
+
   return html`
     <div class="chat-controls">
-      <label class="field chat-controls__session">
-        <select
-          .value=${state.sessionKey}
-          ?disabled=${!state.connected}
-          @change=${(e: Event) => {
-            const next = (e.target as HTMLSelectElement).value;
-            state.sessionKey = next;
-            state.chatMessage = "";
-            state.chatStream = null;
-            (state as unknown as OpenClawApp).chatStreamStartedAt = null;
-            state.chatRunId = null;
-            (state as unknown as OpenClawApp).resetToolStream();
-            (state as unknown as OpenClawApp).resetChatScroll();
+      <!-- Session group -->
+      <div class="chat-controls__group">
+        <label class="field chat-controls__session">
+          <select
+            .value=${state.sessionKey}
+            ?disabled=${!state.connected}
+            @change=${(e: Event) => {
+              const next = (e.target as HTMLSelectElement).value;
+              state.sessionKey = next;
+              state.chatMessage = "";
+              state.chatStream = null;
+              (state as unknown as OpenClawApp).chatStreamStartedAt = null;
+              state.chatRunId = null;
+              (state as unknown as OpenClawApp).resetToolStream();
+              (state as unknown as OpenClawApp).resetChatScroll();
+              state.applySettings({
+                ...state.settings,
+                sessionKey: next,
+                lastActiveSessionKey: next,
+              });
+              void state.loadAssistantIdentity();
+              syncUrlWithSessionKey(
+                state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
+                next,
+                true,
+              );
+              void loadChatHistory(state as unknown as ChatState);
+            }}
+          >
+            ${repeat(
+              sessionOptions,
+              (entry) => entry.key,
+              (entry) =>
+                html`<option value=${entry.key}>
+                  ${entry.displayName ?? entry.key}
+                </option>`,
+            )}
+          </select>
+        </label>
+        <button
+          class="btn btn--sm btn--icon"
+          ?disabled=${state.chatLoading || !state.connected}
+          @click=${async () => {
+            const app = state as unknown as OpenClawApp;
+            app.chatManualRefreshInFlight = true;
+            app.chatNewMessagesBelow = false;
+            await app.updateComplete;
+            app.resetToolStream();
+            try {
+              await refreshChat(state as unknown as Parameters<typeof refreshChat>[0], {
+                scheduleScroll: false,
+              });
+              app.scrollToBottom({ smooth: true });
+            } finally {
+              requestAnimationFrame(() => {
+                app.chatManualRefreshInFlight = false;
+                app.chatNewMessagesBelow = false;
+              });
+            }
+          }}
+          title="Refresh chat history"
+        >
+          ${refreshIcon}
+        </button>
+      </div>
+
+      <!-- Model group -->
+      <div class="chat-controls__group">
+        <label class="field chat-controls__model">
+          <select
+            .value=${currentPrimary ?? ""}
+            ?disabled=${!state.connected}
+            @change=${async (e: Event) => {
+              const val = (e.target as HTMLSelectElement).value;
+              if (!state.client || !state.connected) {
+                return;
+              }
+              try {
+                const hash = (state.configSnapshot as Record<string, unknown> | undefined)?.hash as
+                  | string
+                  | undefined;
+                if (hash) {
+                  const raw = JSON.stringify({
+                    agents: { defaults: { model: { primary: val || null } } },
+                  });
+                  await state.client.request("config.patch", { raw, baseHash: hash });
+                  await loadConfig(state as unknown as ConfigState);
+                }
+              } catch (err) {
+                state.lastError = String(err);
+              }
+            }}
+          >
+            <option value="">Model: default</option>
+            ${renderModelOptions(state.configSnapshot?.config, currentPrimary)}
+          </select>
+        </label>
+      </div>
+
+      <!-- View toggles group -->
+      <div class="chat-controls__group chat-controls__group--toggles">
+        <button
+          class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
+          ?disabled=${disableThinkingToggle}
+          @click=${() => {
+            if (disableThinkingToggle) {
+              return;
+            }
             state.applySettings({
               ...state.settings,
-              sessionKey: next,
-              lastActiveSessionKey: next,
+              chatShowThinking: !state.settings.chatShowThinking,
             });
-            void state.loadAssistantIdentity();
-            syncUrlWithSessionKey(
-              state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
-              next,
-              true,
-            );
-            void loadChatHistory(state as unknown as ChatState);
           }}
+          aria-pressed=${showThinking}
+          title=${disableThinkingToggle ? "Disabled during onboarding" : `Thinking: ${showThinking ? "ON" : "OFF"} — Toggle reasoning output`}
         >
-          ${repeat(
-            sessionOptions,
-            (entry) => entry.key,
-            (entry) =>
-              html`<option value=${entry.key}>
-                ${entry.displayName ?? entry.key}
-              </option>`,
-          )}
-        </select>
-      </label>
-      <button
-        class="btn btn--sm btn--icon"
-        ?disabled=${state.chatLoading || !state.connected}
-        @click=${async () => {
-          const app = state as unknown as OpenClawApp;
-          app.chatManualRefreshInFlight = true;
-          app.chatNewMessagesBelow = false;
-          await app.updateComplete;
-          app.resetToolStream();
-          try {
-            await refreshChat(state as unknown as Parameters<typeof refreshChat>[0], {
-              scheduleScroll: false,
+          ${icons.brain}
+        </button>
+        <button
+          class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
+          ?disabled=${disableFocusToggle}
+          @click=${() => {
+            if (disableFocusToggle) {
+              return;
+            }
+            state.applySettings({
+              ...state.settings,
+              chatFocusMode: !state.settings.chatFocusMode,
             });
-            app.scrollToBottom({ smooth: true });
-          } finally {
-            requestAnimationFrame(() => {
-              app.chatManualRefreshInFlight = false;
-              app.chatNewMessagesBelow = false;
-            });
-          }
-        }}
-        title="Refresh chat data"
-      >
-        ${refreshIcon}
-      </button>
-      <span class="chat-controls__separator">|</span>
-      <button
-        class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
-        ?disabled=${disableThinkingToggle}
-        @click=${() => {
-          if (disableThinkingToggle) {
-            return;
-          }
-          state.applySettings({
-            ...state.settings,
-            chatShowThinking: !state.settings.chatShowThinking,
-          });
-        }}
-        aria-pressed=${showThinking}
-        title=${
-          disableThinkingToggle
-            ? "Disabled during onboarding"
-            : "Toggle assistant thinking/working output"
-        }
-      >
-        ${icons.brain}
-      </button>
-      <button
-        class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
-        ?disabled=${disableFocusToggle}
-        @click=${() => {
-          if (disableFocusToggle) {
-            return;
-          }
-          state.applySettings({
-            ...state.settings,
-            chatFocusMode: !state.settings.chatFocusMode,
-          });
-        }}
-        aria-pressed=${focusActive}
-        title=${
-          disableFocusToggle
-            ? "Disabled during onboarding"
-            : "Toggle focus mode (hide sidebar + page header)"
-        }
-      >
-        ${focusIcon}
-      </button>
+          }}
+          aria-pressed=${focusActive}
+          title=${disableFocusToggle ? "Disabled during onboarding" : `Focus: ${focusActive ? "ON" : "OFF"} — Hide sidebar & header`}
+        >
+          ${focusIcon}
+        </button>
+      </div>
     </div>
   `;
 }

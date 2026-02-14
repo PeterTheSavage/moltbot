@@ -127,6 +127,32 @@
     display: none;
   }
 
+  /* Keep chat controls visible on mobile */
+  .content--chat .content-header {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 4px 6px;
+    max-height: none;
+  }
+
+  .content--chat .content-header > div:first-child {
+    display: none; /* Hide title/subtitle on mobile chat */
+  }
+
+  .content--chat .page-meta {
+    width: 100%;
+  }
+
+  .content--chat .chat-controls {
+    justify-content: center;
+    gap: 4px;
+  }
+
+  .content--chat .chat-controls__group {
+    padding: 2px;
+  }
+
   .content {
     padding: 4px 4px 16px;
     gap: 12px;
